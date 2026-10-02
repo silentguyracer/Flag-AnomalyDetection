@@ -1,0 +1,51 @@
+groups:
+  - name: fraud_detection_alerts
+    rules:
+      - alert: PreAuthLatencySLOBreach
+        expr: histogram_quantile(0.99, rate(pre_auth_latency_seconds_bucket[1m])) * 1000 > 25
+        for: 30s
+        labels:
+          severity: critical
+          team: fraud-engineering
+        annotations:
+          summary: "Pre-Auth Risk Gate latency breached 25ms SLA budget"
+          description: "P99 latency is {{ $value }}ms, risking payment gateway timeouts."
+
+      - alert: MLCircuitBreakerTripped
+        expr: rate(fraud_ml_unavailable_total[1m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          team: ml-ops
+        annotations:
+          summary: "ML Scorer sidecar failing; degraded to rules-only"
+          description: "Circuit breaker opened after consecutive ML timeouts or connection drops."
+
+      - alert: ModelConceptDriftCritical
+        expr: fraud_model_psi_score >= 0.25
+        for: 5m
+        labels:
+          severity: critical
+          team: data-science
+        annotations:
+          summary: "Critical Concept Drift Detected (PSI >= 0.25)"
+          description: "Population Stability Index is {{ $value }}. Distribution has shifted significantly; automated model retraining required."
+
+      - alert: MuleSyndicateRingDetected
+        expr: increase(fraud_graph_syndicates_detected_total[5m]) > 0
+        labels:
+          severity: high
+          team: financial-crime-ops
+        annotations:
+          summary: "New Mule Syndicate or Circular Laundering Ring Identified"
+          description: "Bipartite entity graph detected multi-account credential sharing or circular money laundering."
+
+      - alert: HighFraudFlagBurst
+        expr: rate(fraud_flags_total[1m]) > 20
+        for: 1m
+        labels:
+          severity: high
+          team: fraud-operations
+        annotations:
+          summary: "Extreme surge in fraud flags detected"
+          description: "Current flag generation rate is {{ $value }} flags/sec, indicating potential coordinated botnet or credential stuffing attack."

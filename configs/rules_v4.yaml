@@ -1,0 +1,28 @@
+version: "2026-09-v4"
+flag_threshold: 0.52
+rules:
+  velocity:
+    enabled: true
+    threshold: 4
+    sum_1h_threshold_minor: 80000
+  card_testing:
+    enabled: true
+    small_under_minor: 250
+    min_small: 3
+    large_over_minor: 4000
+  amount_outlier:
+    enabled: true
+    z: 3.2
+    min_history: 10
+    min_amount_minor: 4000
+  new_country:
+    enabled: true
+    min_account_age_days: 10
+  impossible_travel:
+    enabled: true
+    window: 2h
+    max_speed_kmh: 800
+  new_merchant_high_value:
+    enabled: true
+    min_multiplier: 4.5
+    min_amount_minor: 4000
