@@ -18,8 +18,12 @@ import (
 	"fraud-service/internal/bandit"
 	"fraud-service/internal/biometrics"
 	"fraud-service/internal/canary"
+	"fraud-service/internal/chargeback"
 	"fraud-service/internal/consortium"
+	"fraud-service/internal/crypto"
+	"fraud-service/internal/deviceprint"
 	"fraud-service/internal/drift"
+	"fraud-service/internal/embeddings"
 	"fraud-service/internal/events"
 	"fraud-service/internal/features"
 	"fraud-service/internal/graph"
@@ -102,6 +106,14 @@ func main() {
 		runBanditTune(os.Args[2:])
 	case "biometrics-check":
 		runBiometricsCheck(os.Args[2:])
+	case "deviceprint-check":
+		runDeviceprintCheck(os.Args[2:])
+	case "chargeback-resolve":
+		runChargebackResolve(os.Args[2:])
+	case "crypto-screen":
+		runCryptoScreen(os.Args[2:])
+	case "temporal-embed":
+		runTemporalEmbed(os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -127,6 +139,10 @@ func printUsage() {
 	fmt.Println("  fraudctl consortium-query  [--token <string>]")
 	fmt.Println("  fraudctl bandit-tune       [--episodes <n>]")
 	fmt.Println("  fraudctl biometrics-check  [--synthetic <bool>]")
+	fmt.Println("  fraudctl deviceprint-check [--spoofed <bool>] [--renderer <str>]")
+	fmt.Println("  fraudctl chargeback-resolve [--scheme <VISA|MASTERCARD>] [--amount <minor>]")
+	fmt.Println("  fraudctl crypto-screen     [--asset <ETH|BTC|USDT>] [--address <hex>]")
+	fmt.Println("  fraudctl temporal-embed    [--walks <n>] [--nodes <n>]")
 }
 
 func runBacktest(args []string) {
@@ -1447,4 +1463,227 @@ func runBiometricsCheck(args []string) {
 	}
 	fmt.Println("=======================================================")
 }
+
+func runDeviceprintCheck(args []string) {
+	fs := flag.NewFlagSet("deviceprint-check", flag.ExitOnError)
+	spoofed := fs.Bool("spoofed", true, "Simulate anti-detect browser / headless GPU (true) vs genuine workstation (false)")
+	renderer := fs.String("renderer", "", "Custom WebGL renderer string override")
+	_ = fs.Parse(args)
+
+	var metrics *deviceprint.RawDeviceMetrics
+	if *spoofed {
+		rend := "Google Inc. (SwiftShader 5.0)"
+		if *renderer != "" {
+			rend = *renderer
+		}
+		metrics = &deviceprint.RawDeviceMetrics{
+			UserAgent:           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+			Platform:            "Linux x86_64", // Mismatch with Win64 UA
+			HardwareConcurrency: 2,              // Suspiciously low for modern workstation
+			DeviceMemoryGB:      2.0,
+			ScreenResolution:    "1024x768",
+			ColorDepth:          24,
+			WebGLRenderer:       rend,
+			WebGLVendor:         "Google Inc. (SwiftShader)",
+			CanvasHash:          "0000000000000000",
+			AudioContextHash:    "audio_nan_signature",
+			TimezoneOffset:      -300,
+			Language:            "en-US",
+			InstalledFontsCount: 2,
+		}
+	} else {
+		rend := "ANGLE (Apple, Apple M2 Pro, OpenGL 4.1)"
+		if *renderer != "" {
+			rend = *renderer
+		}
+		metrics = &deviceprint.RawDeviceMetrics{
+			UserAgent:           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+			Platform:            "MacIntel",
+			HardwareConcurrency: 12,
+			DeviceMemoryGB:      16.0,
+			ScreenResolution:    "2560x1440",
+			ColorDepth:          30,
+			WebGLRenderer:       rend,
+			WebGLVendor:         "Google Inc. (Apple)",
+			CanvasHash:          "f4a8b920194c728e",
+			AudioContextHash:    "ac_f63e90a182",
+			TimezoneOffset:      0,
+			Language:            "en-GB",
+			InstalledFontsCount: 148,
+		}
+	}
+
+	verdict := deviceprint.Analyze(metrics)
+
+	fmt.Println("\n=======================================================")
+	fmt.Println("       Hardware Entropy & Deviceprint Verification     ")
+	fmt.Println("=======================================================")
+	fmt.Printf("Device Fingerprint:     %s\n", verdict.DeviceFingerprint)
+	fmt.Printf("Profile Mode:           %s\n", map[bool]string{true: "Anti-Detect / Headless VM Probe", false: "Authentic Hardware Profile"}[*spoofed])
+	fmt.Printf("Spoofed Environment:    %v\n", verdict.IsSpoofed)
+	fmt.Printf("Virtual Machine / VM:   %v\n", verdict.IsVirtualMachine)
+	fmt.Printf("Hardware Entropy Score: %.3f / 1.000\n", verdict.EntropyScore)
+	fmt.Printf("Risk Anomaly Score:     %.2f / 1.00\n\n", verdict.RiskScore)
+
+	if len(verdict.SpoofingIndicators) > 0 {
+		fmt.Println("Detected Spoofing Vectors:")
+		for _, ind := range verdict.SpoofingIndicators {
+			fmt.Printf("  • %s\n", ind)
+		}
+	} else {
+		fmt.Println("Hardware entropy matches genuine silicon GPU and acoustic hardware.")
+	}
+	fmt.Println("=======================================================")
+}
+
+func runChargebackResolve(args []string) {
+	fs := flag.NewFlagSet("chargeback-resolve", flag.ExitOnError)
+	scheme := fs.String("scheme", "VISA", "Scheme network: VISA or MASTERCARD")
+	amount := fs.Int64("amount", 8500, "Disputed amount in minor units (£85.00)")
+	reason := fs.String("reason", "10.4", "Dispute reason code (e.g. 10.4 Card-Absent Fraud)")
+	merchant := fs.String("merchant", "luxury-retail-uk", "Merchant identifier")
+	_ = fs.Parse(args)
+
+	monitor := chargeback.NewDisputeMonitor()
+
+	// Seed some legitimate transactions
+	for i := 0; i < 995; i++ {
+		monitor.RecordTransaction(*merchant)
+	}
+
+	net := chargeback.NetworkVisa
+	if strings.ToUpper(*scheme) == "MASTERCARD" {
+		net = chargeback.NetworkMastercard
+	}
+
+	alert := chargeback.PreDisputeAlert{
+		AlertID:        fmt.Sprintf("ALERT-%s-%d", strings.ToUpper(*scheme), time.Now().Unix()),
+		Network:        net,
+		TransactionID:  uuid.New(),
+		ARN:            "74512349827349182304918",
+		CardLast4:      "8812",
+		AmountMinor:    *amount,
+		Currency:       "GBP",
+		ReasonCode:     *reason,
+		IssuerBank:     "Barclays Bank UK",
+		AlertTimestamp: time.Now().UTC(),
+	}
+
+	outcome := monitor.ResolveAlert(alert, *merchant)
+	report := monitor.GetDTRReport(*merchant)
+
+	fmt.Println("\n=======================================================")
+	fmt.Println("     Card Scheme Pre-Dispute Deflection (Verifi/Ethoca) ")
+	fmt.Println("=======================================================")
+	fmt.Printf("Alert ID:             %s\n", alert.AlertID)
+	fmt.Printf("Scheme Network:       %s\n", alert.Network)
+	fmt.Printf("Issuer & Reason:      %s (Code %s)\n", alert.IssuerBank, alert.ReasonCode)
+	fmt.Printf("Dispute Avoided:      %v\n", outcome.DisputeAvoided)
+	fmt.Printf("Resolution Status:    %s\n", outcome.Status)
+	fmt.Printf("Scheme Penalty Saved: £%.2f (Avoided Visa/MC arbitration fee)\n", outcome.FeeSavedGBP)
+	fmt.Printf("Action Taken:         %s\n\n", outcome.Explanation)
+
+	fmt.Println("Merchant Dispute-to-Transaction Ratio (DTR) Monitor:")
+	fmt.Printf("  Merchant ID:        %s\n", report.Merchant)
+	fmt.Printf("  Total Volume:       %d transactions\n", report.TotalTxns)
+	fmt.Printf("  Active Inquiries:   %d chargebacks\n", report.TotalDisputes)
+	fmt.Printf("  Rolling DTR:        %.2f%%\n", report.DisputeRatioPct)
+	fmt.Printf("  Program Tier:       %s\n", report.Tier)
+	fmt.Printf("  Scheme Health:      %s\n", report.StatusMessage)
+	fmt.Println("=======================================================")
+}
+
+func runCryptoScreen(args []string) {
+	fs := flag.NewFlagSet("crypto-screen", flag.ExitOnError)
+	asset := fs.String("asset", "ETH", "Blockchain cryptocurrency symbol (ETH, BTC, USDT)")
+	address := fs.String("address", "0xd90e2f925da726b50c4ed8d0fb90ad053324f31b", "Wallet or contract address to screen")
+	_ = fs.Parse(args)
+
+	report := crypto.ScreenAddress(*address, *asset)
+
+	fmt.Println("\n=======================================================")
+	fmt.Println("     Web3 & Blockchain Sanctions / Mixer Screening     ")
+	fmt.Println("=======================================================")
+	fmt.Printf("Address Screened:     %s\n", report.Address)
+	fmt.Printf("Asset / Network:      %s\n", report.Currency)
+	fmt.Printf("Transaction Blocked:  %v\n", report.IsBlocked)
+	fmt.Printf("AML Risk Score:       %.2f / 1.00\n", report.RiskScore)
+	fmt.Printf("Threat Category:      %s\n", report.Category)
+	if report.EntityIdentified != "" {
+		fmt.Printf("Identified Entity:    %s\n", report.EntityIdentified)
+	}
+	if report.DirectExposurePct > 0 {
+		fmt.Printf("Direct Exposure:      %.1f%%\n", report.DirectExposurePct)
+	}
+	fmt.Printf("Compliance Findings:  %s\n", report.Explanation)
+	fmt.Println("=======================================================")
+}
+
+func runTemporalEmbed(args []string) {
+	fs := flag.NewFlagSet("temporal-embed", flag.ExitOnError)
+	nodesCount := fs.Int("nodes", 30, "Number of account nodes to generate in temporal graph")
+	walksCount := fs.Int("walks", 20, "Number of continuous-time random walks per node")
+	_ = fs.Parse(args)
+
+	tg := embeddings.NewTemporalGraph()
+	baseTime := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+
+	// Create mule ring nodes
+	muleA := uuid.New()
+	muleB := uuid.New()
+	muleC := uuid.New()
+
+	// High-frequency circular transfers in the mule ring
+	for step := 0; step < 10; step++ {
+		t := baseTime.Add(time.Duration(step*30) * time.Second)
+		tg.AddEdge(muleA, muleB, 490000, t)
+		tg.AddEdge(muleB, muleC, 485000, t.Add(10*time.Second))
+		tg.AddEdge(muleC, muleA, 480000, t.Add(20*time.Second))
+	}
+
+	// Create random normal accounts and sporadic transfers
+	var normalAccounts []uuid.UUID
+	for i := 0; i < *nodesCount; i++ {
+		normalAccounts = append(normalAccounts, uuid.New())
+	}
+	for i := 0; i < len(normalAccounts)-1; i++ {
+		t := baseTime.Add(time.Duration(i*3600) * time.Second)
+		tg.AddEdge(normalAccounts[i], normalAccounts[i+1], 2500, t)
+	}
+
+	// Compute continuous-time embeddings
+	embA := tg.ComputeEmbedding(muleA, *walksCount, 8, 42)
+	embB := tg.ComputeEmbedding(muleB, *walksCount, 8, 42)
+	embNorm := tg.ComputeEmbedding(normalAccounts[0], *walksCount, 8, 42)
+
+	simMules := embeddings.CosineSimilarity(embA, embB)
+	simNormal := embeddings.CosineSimilarity(embA, embNorm)
+
+	fmt.Println("\n=======================================================")
+	fmt.Println("    Temporal Graph Continuous-Time Node Embeddings     ")
+	fmt.Println("=======================================================")
+	fmt.Printf("Graph Nodes:             %d accounts\n", *nodesCount+3)
+	fmt.Printf("Random Walks / Node:     %d walks (exp time-decay λ=0.0001)\n", *walksCount)
+	fmt.Printf("Latent Vector Dimension: %d-D\n\n", embeddings.EmbeddingDim)
+
+	fmt.Println("Sample Latent Vector (Mule Account A):")
+	fmt.Printf("  [")
+	for i, v := range embA.Vector {
+		if i > 0 && i%4 == 0 {
+			fmt.Printf("\n   ")
+		}
+		fmt.Printf("%8.4f ", v)
+	}
+	fmt.Printf("]\n  L2 Norm: %.4f\n\n", embA.Norm)
+
+	fmt.Println("Structural Cosine Similarity Analysis:")
+	fmt.Printf("  • Cosine Similarity (Mule A <-> Mule B): %.4f (High temporal-structural affinity)\n", simMules)
+	fmt.Printf("  • Cosine Similarity (Mule A <-> Normal): %.4f (Orthogonal behavioural trajectory)\n\n", simNormal)
+
+	if simMules > 0.70 {
+		fmt.Println("Verdict: Temporal graph embedding successfully identified co-conspirator laundering ring.")
+	}
+	fmt.Println("=======================================================")
+}
+
 

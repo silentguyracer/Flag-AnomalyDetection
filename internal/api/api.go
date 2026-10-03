@@ -17,19 +17,25 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"fraud-service/internal/authgate"
 	"fraud-service/internal/canary"
+	"fraud-service/internal/chargeback"
+	"fraud-service/internal/crypto"
+	"fraud-service/internal/deviceprint"
 	"fraud-service/internal/drift"
+	"fraud-service/internal/events"
 	"fraud-service/internal/graph"
 	"fraud-service/internal/rules"
+	"fraud-service/internal/sar"
 	"fraud-service/internal/xai"
 )
 
 // Server implements the Case API, Auth Gate, and Review feedback loop HTTP service.
 type Server struct {
-	router       chi.Router
-	db           *pgxpool.Pool
-	authGate     *authgate.Gate
-	memGraph     *graph.MemoryGraph
-	canaryRunner *canary.CanaryRunner
+	router         chi.Router
+	db             *pgxpool.Pool
+	authGate       *authgate.Gate
+	memGraph       *graph.MemoryGraph
+	canaryRunner   *canary.CanaryRunner
+	disputeMonitor *chargeback.DisputeMonitor
 }
 
 // NewServer initializes the HTTP router and endpoints.
@@ -40,11 +46,12 @@ func NewServer(
 	canaryRunner *canary.CanaryRunner,
 ) *Server {
 	s := &Server{
-		router:       chi.NewRouter(),
-		db:           dbPool,
-		authGate:     gate,
-		memGraph:     memGraph,
-		canaryRunner: canaryRunner,
+		router:         chi.NewRouter(),
+		db:             dbPool,
+		authGate:       gate,
+		memGraph:       memGraph,
+		canaryRunner:   canaryRunner,
+		disputeMonitor: chargeback.NewDisputeMonitor(),
 	}
 
 	s.setupRoutes()
@@ -96,6 +103,19 @@ func (s *Server) setupRoutes() {
 
 	// Concept Drift Monitoring Endpoint
 	s.router.Get("/v1/drift", s.handleDriftReport)
+
+	// Hardware Entropy & Device Fingerprinting
+	s.router.Post("/v1/deviceprint/evaluate", s.handleDevicePrintEvaluate)
+
+	// Pre-Dispute Early Warning & DTR Monitoring
+	s.router.Post("/v1/chargebacks/early-warning", s.handleChargebackEarlyWarning)
+	s.router.Get("/v1/chargebacks/dtr", s.handleChargebackDTR)
+
+	// Crypto & Blockchain Sanctions Screening
+	s.router.Post("/v1/crypto/screen", s.handleCryptoScreen)
+
+	// Regulatory Suspicious Activity Report (SAR)
+	s.router.Post("/v1/sar/generate", s.handleSARGenerate)
 
 	s.router.Get("/flags", s.handleListFlags)
 	s.router.Get("/flags/{id}", s.handleGetFlag)
@@ -692,4 +712,90 @@ func (s *Server) handleExplainTransaction(w http.ResponseWriter, r *http.Request
 	notice := xai.Explain(decision, finalScore, signals)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(notice)
+}
+
+// handleDevicePrintEvaluate analyzes browser hardware entropy and anti-detect spoofing.
+func (s *Server) handleDevicePrintEvaluate(w http.ResponseWriter, r *http.Request) {
+	var metrics deviceprint.RawDeviceMetrics
+	if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	verdict := deviceprint.Analyze(&metrics)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(verdict)
+}
+
+// handleChargebackEarlyWarning receives inbound Visa Verifi / Mastercard Ethoca pre-dispute alerts.
+func (s *Server) handleChargebackEarlyWarning(w http.ResponseWriter, r *http.Request) {
+	var alert chargeback.PreDisputeAlert
+	if err := json.NewDecoder(r.Body).Decode(&alert); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	merchant := r.URL.Query().Get("merchant")
+	if merchant == "" {
+		merchant = "default_merchant"
+	}
+	outcome := s.disputeMonitor.ResolveAlert(alert, merchant)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(outcome)
+}
+
+// handleChargebackDTR returns rolling Dispute-to-Transaction Ratio for a merchant.
+func (s *Server) handleChargebackDTR(w http.ResponseWriter, r *http.Request) {
+	merchant := r.URL.Query().Get("merchant")
+	if merchant == "" {
+		merchant = "default_merchant"
+	}
+	report := s.disputeMonitor.GetDTRReport(merchant)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(report)
+}
+
+// handleCryptoScreen screens cryptocurrency addresses for OFAC sanctions and mixer taint.
+func (s *Server) handleCryptoScreen(w http.ResponseWriter, r *http.Request) {
+	type ScreenReq struct {
+		Address  string `json:"address"`
+		Currency string `json:"currency"`
+	}
+	var req ScreenReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	report := crypto.ScreenAddress(req.Address, req.Currency)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(report)
+}
+
+// handleSARGenerate compiles an official FinCEN Part V Suspicious Activity Report dossier.
+func (s *Server) handleSARGenerate(w http.ResponseWriter, r *http.Request) {
+	type SARReq struct {
+		AccountID        uuid.UUID `json:"account_id"`
+		FlagID           uuid.UUID `json:"flag_id"`
+		TypologyOverride string    `json:"typology_override"`
+	}
+	var req SARReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.AccountID == uuid.Nil {
+		req.AccountID = uuid.New()
+	}
+	if req.FlagID == uuid.Nil {
+		req.FlagID = uuid.New()
+	}
+	history := []events.TransactionCreated{
+		{TransactionID: uuid.New(), AccountID: req.AccountID, AmountMinor: 500000},
+		{TransactionID: uuid.New(), AccountID: req.AccountID, AmountMinor: 750000},
+	}
+	signals := []rules.Signal{
+		{Rule: "amount_outlier", Score: 0.98, Reason: "High-sigma outlier over customer average"},
+		{Rule: "impossible_travel", Score: 0.95, Reason: "Superhuman velocity between jurisdictions"},
+	}
+	dossier := sar.GenerateDraft(req.AccountID, req.FlagID, history, signals, req.TypologyOverride)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(dossier)
 }

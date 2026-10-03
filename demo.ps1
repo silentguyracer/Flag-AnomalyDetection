@@ -27,50 +27,65 @@ switch ($Target) {
         python ml/train.py
     }
     "fraud-demo" {
-        Write-Host "`n[STEP 1/13] Running Core Scenario Integration Tests (12/12)..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 1/17] Running Core Scenario Integration Tests (12/12)..." -ForegroundColor Yellow
         go test -v ./test/...
 
-        Write-Host "`n[STEP 2/13] Synchronous Pre-Auth Gate (<25ms SLA)..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 2/17] Synchronous Pre-Auth Gate (<25ms SLA)..." -ForegroundColor Yellow
         Write-Host "--- Test A: Low-Risk Everyday Spend (Expect APPROVE) ---" -ForegroundColor Cyan
         .\bin\fraudctl.exe auth-check --amount 1500 --country GB --channel contactless
 
         Write-Host "--- Test B: Severe Risk Anomaly (Expect DECLINE) ---" -ForegroundColor Red
         .\bin\fraudctl.exe auth-check --amount 45000 --country JP --channel online --merchant "Tokyo Luxury"
 
-        Write-Host "`n[STEP 3/13] Regulatory Explainable AI (XAI) & Counterfactual Notice..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 3/17] Regulatory Explainable AI (XAI) & Counterfactual Notice..." -ForegroundColor Yellow
         .\bin\fraudctl.exe explain --amount 45000 --country JP --channel online --merchant "Tokyo Luxury Direct" --mcc 6051
 
-        Write-Host "`n[STEP 4/13] Entity Graph: Circular Laundering Loop (Cycle Detection)..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 4/17] Entity Graph: Circular Laundering Loop (Cycle Detection)..." -ForegroundColor Yellow
         .\bin\fraudctl.exe cycle-detect --depth 5
 
-        Write-Host "`n[STEP 5/13] Entity Graph: Personalized PageRank Dirty Money Diffusion..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 5/17] Entity Graph: Personalized PageRank Dirty Money Diffusion..." -ForegroundColor Yellow
         .\bin\fraudctl.exe risk-diffusion --min-risk 0.15
 
-        Write-Host "`n[STEP 6/13] Cryptographic Zero-PII Consortium Threat Query..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 6/17] Cryptographic Zero-PII Consortium Threat Query..." -ForegroundColor Yellow
         .\bin\fraudctl.exe consortium-query --token card_pan_compromised_darkweb_9918
 
-        Write-Host "`n[STEP 7/13] Behavioral Biometrics & Neuromuscular Cadence..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 7/17] Behavioral Biometrics & Neuromuscular Cadence..." -ForegroundColor Yellow
         Write-Host "--- Profile A: Synthetic Automation Bot ---" -ForegroundColor Red
         .\bin\fraudctl.exe biometrics-check -synthetic=true
         Write-Host "--- Profile B: Human Shopper ---" -ForegroundColor Green
         .\bin\fraudctl.exe biometrics-check -synthetic=false
 
-        Write-Host "`n[STEP 8/13] Contextual Multi-Armed Bandit (Thompson Sampling Thresholds)..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 8/17] Hardware Entropy & Deviceprint Verification (Anti-Detect Browser / Headless GPU)..." -ForegroundColor Yellow
+        Write-Host "--- Profile A: Headless VM / Anti-Detect Browser ---" -ForegroundColor Red
+        .\bin\fraudctl.exe deviceprint-check -spoofed=true
+        Write-Host "--- Profile B: Authentic Physical Hardware ---" -ForegroundColor Green
+        .\bin\fraudctl.exe deviceprint-check -spoofed=false
+
+        Write-Host "`n[STEP 9/17] Card Scheme Pre-Dispute Deflection (Visa Verifi RDR & Mastercard Ethoca)..." -ForegroundColor Yellow
+        .\bin\fraudctl.exe chargeback-resolve -scheme=VISA -amount=8500
+
+        Write-Host "`n[STEP 10/17] Web3 & Blockchain Sanctions / Mixer Screening (OFAC / Tornado Cash)..." -ForegroundColor Yellow
+        .\bin\fraudctl.exe crypto-screen -asset=ETH -address=0xd90e2f925da726b50c4ed8d0fb90ad053324f31b
+
+        Write-Host "`n[STEP 11/17] Temporal Graph Continuous-Time Random Walk Node Embeddings..." -ForegroundColor Yellow
+        .\bin\fraudctl.exe temporal-embed -nodes=25 -walks=15
+
+        Write-Host "`n[STEP 12/17] Contextual Multi-Armed Bandit (Thompson Sampling Thresholds)..." -ForegroundColor Yellow
         .\bin\fraudctl.exe bandit-tune --episodes 500
 
-        Write-Host "`n[STEP 9/13] Automated Regulatory Suspicious Activity Report (FinCEN Part V)..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 13/17] Automated Regulatory Suspicious Activity Report (FinCEN Part V)..." -ForegroundColor Yellow
         .\bin\fraudctl.exe sar --amount 1250000
 
-        Write-Host "`n[STEP 10/13] Live Differential Shadow Canary & Promotion Safety..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 14/17] Live Differential Shadow Canary & Promotion Safety..." -ForegroundColor Yellow
         .\bin\fraudctl.exe canary-status --samples 5000
 
-        Write-Host "`n[STEP 11/13] Population Stability Index (PSI) Concept Drift Check..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 15/17] Population Stability Index (PSI) Concept Drift Check..." -ForegroundColor Yellow
         .\bin\fraudctl.exe drift-check --samples 1000
 
-        Write-Host "`n[STEP 12/13] Rules Engine Benchmark (Candidate v3 vs Ground Truth)..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 16/17] Rules Engine Benchmark (Candidate v3 vs Ground Truth)..." -ForegroundColor Yellow
         .\bin\fraudctl.exe backtest --rules configs/rules.yaml --samples 10000
 
-        Write-Host "`n[STEP 13/13] Live Attack Scenario Simulations..." -ForegroundColor Yellow
+        Write-Host "`n[STEP 17/17] Live Attack Scenario Simulations..." -ForegroundColor Yellow
         Write-Host "`n--- Card Testing Attack Simulation ---" -ForegroundColor Magenta
         .\bin\fraudctl.exe simulate --scenario card_testing
 
